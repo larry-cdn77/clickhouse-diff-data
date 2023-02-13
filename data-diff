@@ -1,0 +1,105 @@
+#!/usr/bin/python3
+import os
+import statistics
+import sys
+import time
+
+import clickhouse_driver
+
+__version__ = '0.0.1'
+
+intervals = {
+    '3..12h':  '{timestamp} BETWEEN subtractHours(start, 12) AND subtractHours(start, 3)',
+    '12..24h': '{timestamp} BETWEEN subtractHours(start, 24) AND subtractHours(start, 12)',
+    '1-7d':    '{timestamp} BETWEEN subtractDays(start, 7) AND subtractDays(start, 1)',
+    '7-30d':   '{timestamp} BETWEEN subtractDays(start, 30) AND subtractDays(start, 7)',
+    '30-90d':  '{timestamp} BETWEEN subtractDays(start, 90) AND subtractDays(start, 30)',
+}
+
+tolerance = 0.01
+
+def resolve(absolute):
+    keys, values = list(absolute.keys()), list(absolute.values())
+    zeroes = values.count(0)
+    stdev = statistics.pstdev(values)
+    mean = statistics.mean(values)
+
+    if zeroes == len(absolute):
+        return [0, '0 *']
+    elif zeroes > 0:
+        return [1, '0 ' + ','.join([shortname \
+            for shortname, returned in absolute.items() if returned == 0])]
+    elif stdev / mean > tolerance: # same tolerance used against std. dev. ...
+        summary = []
+        for shortname, returned in absolute.items():
+            if returned < mean * (1 - tolerance): # ...and individual dev.
+                summary += [shortname + '<M']
+            elif returned > mean * (1 + tolerance):
+                summary += [shortname + '>M']
+        return [1, ','.join(summary)]
+    else:
+        absolute.keys()
+        return [0, '='.join(keys)]
+
+def diff(table, timestamp, traffic, now, isql, clusters):
+    # TODO other per-cluster error handling
+    absolute = {}
+    for shortname, cluster in clusters.items():
+        for (exists,) in cluster.execute('''
+            SELECT count() FROM system.tables WHERE database = 'dist'
+            AND name = '%s'
+        ''' % table):
+            break
+        if exists != 1:
+            returned = 0
+        else:
+            for (returned,) in cluster.execute('''
+                WITH toStartOfHour(fromUnixTimestamp(%d)) AS start
+                SELECT sum(%s) FROM dist.%s WHERE %s
+                ''' % \
+                (now, traffic, table, isql.format(timestamp=timestamp))):
+                break
+        absolute[shortname] = returned
+    return resolve(absolute), absolute
+
+def __main__():
+    if len(sys.argv) < 2:
+        print('''usage: data-diff CLUSTERS TABLES
+
+CLUSTERS line format: SHORT-NAME BOOTSTRAP-HOSTNAME (will add port 9000)
+TABLES line format: TABLE-NAME TIMESTAMP-COLUMN TRAFFIC-COLUMN
+
+TABLE-NAME can use percent-style wildcard syntax
+
+empty lines or lines starting with `#' are ignored
+''')
+        sys.exit(2)
+    clusters = {}
+    now = time.time()
+    with open(sys.argv[1]) as f:
+        for line in f:
+            split = line.strip().split(' ')
+            if len(split) == 2 and split[0][0] != '#':
+                clusters[split[0]] = clickhouse_driver.Client(
+                    host=split[1], port=9000, user='default', password='')
+    tables = open(sys.argv[2])
+    result = {}
+
+    for line in tables:
+        split = line.strip().split(' ')
+        if len(split) == 3 and split[0][0] != '#':
+            table = split[0]
+            result[table] = {}
+            for ilabel, isql in intervals.items():
+                result[table][ilabel] = \
+                    diff(table, split[1], split[2], now, isql, clusters)
+    tables.close()
+
+    for table, d in result.items():
+        for ilabel, ((stat, summary), absolute) in d.items():
+            if stat == 0:
+                print('%s\t%s\tGOOD\t%s\t%s' % (table, ilabel, summary, ''))
+            else:
+                print('%s\t%s\tBAD\t%s\t%s' % (table, ilabel, summary, absolute))
+
+__main__()

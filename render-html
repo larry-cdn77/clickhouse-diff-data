@@ -1,0 +1,26 @@
+#!/usr/bin/python3
+import html
+import sys
+
+result = {}
+for line in sys.stdin:
+    split = line.strip().split('\t')
+    if len(split) >= 4 and split[0][0] != '#':
+        table, ilabel, stat, summary = split[0:4]
+        if table not in result:
+            result[table] = {}
+        result[table][ilabel] = (stat, summary)
+
+ilabels = list(reversed(result[list(result.keys())[0]].keys()))
+
+print('<table><tr>')
+print('<tr><td></td><td>' + '</td><td>'.join(ilabels) + '</td></tr>')
+for table, d in result.items():
+    fields = {}
+    for ilabel, (stat, summary) in d.items():
+        fields[ilabel] = '<td class="%s">%s</td>' % (stat, html.escape(summary))
+    line = ''
+    for ilabel in ilabels:
+        line += fields[ilabel]
+    print('<tr><td>' + table + '</td>' + line + '</tr>')
+print('</table>')
