@@ -13,7 +13,7 @@ for line in sys.stdin:
 
 ilabels = list(reversed(result[list(result.keys())[0]].keys()))
 
-print('<table><tr>')
+print('<table>')
 print('<tr><td></td><td>' + '</td><td>'.join(ilabels) + '</td></tr>')
 for table, d in result.items():
     fields = {}

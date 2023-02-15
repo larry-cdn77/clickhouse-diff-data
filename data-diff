@@ -6,11 +6,11 @@ import time
 
 import clickhouse_driver
 
-__version__ = '0.0.1'
+__version__ = '0.0.2'
 
 intervals = {
-    '3..12h':  '{timestamp} BETWEEN subtractHours(start, 12) AND subtractHours(start, 3)',
-    '12..24h': '{timestamp} BETWEEN subtractHours(start, 24) AND subtractHours(start, 12)',
+    'today':     'toDate({timestamp}) = today()',
+    'yesterday': 'toDate({timestamp}) = yesterday()',
     '1-7d':    '{timestamp} BETWEEN subtractDays(start, 7) AND subtractDays(start, 1)',
     '7-30d':   '{timestamp} BETWEEN subtractDays(start, 30) AND subtractDays(start, 7)',
     '30-90d':  '{timestamp} BETWEEN subtractDays(start, 90) AND subtractDays(start, 30)',
@@ -63,15 +63,13 @@ def diff(table, timestamp, traffic, now, isql, clusters):
     return resolve(absolute), absolute
 
 def __main__():
-    if len(sys.argv) < 2:
-        print('''usage: data-diff CLUSTERS TABLES
+    if len(sys.argv) != 6:
+        print('''usage: data-diff CLUSTERS OUTFILE TABLE TIMESTAMP TRAFFIC
 
-CLUSTERS line format: SHORT-NAME BOOTSTRAP-HOSTNAME (will add port 9000)
-TABLES line format: TABLE-NAME TIMESTAMP-COLUMN TRAFFIC-COLUMN
-
-TABLE-NAME can use percent-style wildcard syntax
-
-empty lines or lines starting with `#' are ignored
+- CLUSTERS file line format: SHORT-NAME BOOTSTRAP-HOSTNAME (will add port 9000)
+- OUTFILE line format: TABLE<TAB>INTERVAL<TAB>GOOD|BAD<TAB>SUMMARY<TAB>VALUES
+- TABLE is taken from database `dist' and can use percent-style wildcard syntax
+- TIMESTAMP and TRAFFIC are column names for filtering and aggregation, resp.
 ''')
         sys.exit(2)
     clusters = {}
@@ -79,27 +77,22 @@ empty lines or lines starting with `#' are ignored
     with open(sys.argv[1]) as f:
         for line in f:
             split = line.strip().split(' ')
-            if len(split) == 2 and split[0][0] != '#':
-                clusters[split[0]] = clickhouse_driver.Client(
-                    host=split[1], port=9000, user='default', password='')
-    tables = open(sys.argv[2])
-    result = {}
+            if len(split) != 2:
+                raise Exception('bad line: ' + line)
+            clusters[split[0]] = clickhouse_driver.Client(
+                host=split[1], port=9000, user='default', password='')
 
-    for line in tables:
-        split = line.strip().split(' ')
-        if len(split) == 3 and split[0][0] != '#':
-            table = split[0]
-            result[table] = {}
-            for ilabel, isql in intervals.items():
-                result[table][ilabel] = \
-                    diff(table, split[1], split[2], now, isql, clusters)
-    tables.close()
-
-    for table, d in result.items():
-        for ilabel, ((stat, summary), absolute) in d.items():
+    with open(sys.argv[2], 'a') as f:
+        for ilabel, isql in intervals.items():
+            table, timestamp, traffic = sys.argv[3:6]
+            (stat, summary), absolute = \
+                diff(table, timestamp, traffic, now, isql, clusters)
             if stat == 0:
-                print('%s\t%s\tGOOD\t%s\t%s' % (table, ilabel, summary, ''))
+                f.write('%s\t%s\tGOOD\t%s\t%s\n' % \
+                    (table, ilabel, summary, ''))
             else:
-                print('%s\t%s\tBAD\t%s\t%s' % (table, ilabel, summary, absolute))
+                f.write('%s\t%s\tBAD\t%s\t%s\n' % \
+                    (table, ilabel, summary, absolute))
+    f.close()
 
 __main__()
