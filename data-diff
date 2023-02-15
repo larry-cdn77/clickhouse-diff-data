@@ -6,15 +6,7 @@ import time
 
 import clickhouse_driver
 
-__version__ = '0.0.2'
-
-intervals = {
-    'today':     'toDate({timestamp}) = today()',
-    'yesterday': 'toDate({timestamp}) = yesterday()',
-    '1-7d':    '{timestamp} BETWEEN subtractDays(start, 7) AND subtractDays(start, 1)',
-    '7-30d':   '{timestamp} BETWEEN subtractDays(start, 30) AND subtractDays(start, 7)',
-    '30-90d':  '{timestamp} BETWEEN subtractDays(start, 90) AND subtractDays(start, 30)',
-}
+__version__ = '0.0.3'
 
 tolerance = 0.01
 
@@ -41,7 +33,7 @@ def resolve(absolute):
         absolute.keys()
         return [0, '='.join(keys)]
 
-def diff(table, timestamp, traffic, now, isql, clusters):
+def diff(table, timestamp, traffic, now, interval, clusters):
     # TODO other per-cluster error handling
     absolute = {}
     for shortname, cluster in clusters.items():
@@ -57,19 +49,20 @@ def diff(table, timestamp, traffic, now, isql, clusters):
                 WITH toStartOfHour(fromUnixTimestamp(%d)) AS start
                 SELECT sum(%s) FROM dist.%s WHERE %s
                 ''' % \
-                (now, traffic, table, isql.format(timestamp=timestamp))):
+                (now, traffic, table, interval.format(timestamp=timestamp))):
                 break
         absolute[shortname] = returned
     return resolve(absolute), absolute
 
 def __main__():
     if len(sys.argv) != 6:
-        print('''usage: data-diff CLUSTERS OUTFILE TABLE TIMESTAMP TRAFFIC
+        print('''usage: data-diff CLUSTERS INTERVAL TABLE TIMESTAMP TRAFFIC
 
 - CLUSTERS file line format: SHORT-NAME BOOTSTRAP-HOSTNAME (will add port 9000)
-- OUTFILE line format: TABLE<TAB>INTERVAL<TAB>GOOD|BAD<TAB>SUMMARY<TAB>VALUES
+- INTERVAL is SQL syntax with `{t}' to be replaced with timestamp column name
 - TABLE is taken from database `dist' and can use percent-style wildcard syntax
 - TIMESTAMP and TRAFFIC are column names for filtering and aggregation, resp.
+- output format: GOOD|BAD<TAB>SUMMARY<TAB>VALUES
 ''')
         sys.exit(2)
     clusters = {}
@@ -82,17 +75,9 @@ def __main__():
             clusters[split[0]] = clickhouse_driver.Client(
                 host=split[1], port=9000, user='default', password='')
 
-    with open(sys.argv[2], 'a') as f:
-        for ilabel, isql in intervals.items():
-            table, timestamp, traffic = sys.argv[3:6]
-            (stat, summary), absolute = \
-                diff(table, timestamp, traffic, now, isql, clusters)
-            if stat == 0:
-                f.write('%s\t%s\tGOOD\t%s\t%s\n' % \
-                    (table, ilabel, summary, ''))
-            else:
-                f.write('%s\t%s\tBAD\t%s\t%s\n' % \
-                    (table, ilabel, summary, absolute))
-    f.close()
+    interval, table, timestamp, traffic = sys.argv[2:6]
+    (stat, summary), absolute = \
+        diff(table, timestamp, traffic, now, interval, clusters)
+    print('%s\t%s\t%s' % ('GOOD' if stat == 0 else 'BAD', summary, absolute))
 
 __main__()
