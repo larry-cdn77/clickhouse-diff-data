@@ -49,7 +49,7 @@ def diff(table, timestamp, traffic, now, interval, clusters):
                 WITH toStartOfHour(fromUnixTimestamp(%d)) AS start
                 SELECT sum(%s) FROM dist.%s WHERE %s
                 ''' % \
-                (now, traffic, table, interval.format(timestamp=timestamp))):
+                (now, traffic, table, interval.format(t=timestamp))):
                 break
         absolute[shortname] = returned
     return resolve(absolute), absolute
