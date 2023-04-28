@@ -13,12 +13,15 @@ for line in sys.stdin:
 
 ilabels = list(reversed(result[list(result.keys())[0]].keys()))
 
+def escape(s): # allow escape sequences for fancy like the Greek alphabet
+    return s.replace('<', '&lt;').replace('>', '&gt;')
+
 print('<table>')
 print('<tr><td></td><td>' + '</td><td>'.join(ilabels) + '</td></tr>')
 for table, d in result.items():
     fields = {}
     for ilabel, (stat, summary) in d.items():
-        fields[ilabel] = '<td class="%s">%s</td>' % (stat, html.escape(summary))
+        fields[ilabel] = '<td class="%s">%s</td>' % (stat, escape(summary))
     line = ''
     for ilabel in ilabels:
         line += fields[ilabel]
