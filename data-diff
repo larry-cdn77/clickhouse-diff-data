@@ -6,14 +6,11 @@ import time
 
 import clickhouse_driver
 
-__version__ = '0.0.5'
+__version__ = '0.1'
 
-tolerance = 0.002
-
-def resolve(absolute):
+def resolve(absolute, tolerance):
     keys, values = list(absolute.keys()), list(absolute.values())
     zeroes = values.count(0)
-    stdev = statistics.pstdev(values)
     mean = statistics.mean(values)
 
     if zeroes == len(absolute):
@@ -21,19 +18,19 @@ def resolve(absolute):
     elif zeroes > 0:
         return [1, '0 ' + ','.join([shortname \
             for shortname, returned in absolute.items() if returned == 0])]
-    elif stdev / mean > tolerance: # same tolerance used against std. dev. ...
+    else:
         summary = []
         for shortname, returned in absolute.items():
-            if returned < mean * (1 - tolerance): # ...and individual dev.
+            if returned < mean * (1 - tolerance / 100.0): # ...and individual dev.
                 summary += [shortname + '<M']
-            elif returned > mean * (1 + tolerance):
+            elif returned > mean * (1 + tolerance / 100.0):
                 summary += [shortname + '>M']
-        return [1, ','.join(summary)]
-    else:
-        absolute.keys()
-        return [0, '='.join(keys)]
+        if len(summary) == 0:
+            return [0, '='.join(keys)]
+        else:
+            return [1, ','.join(summary)]
 
-def diff(table, timestamp, traffic, now, interval, clusters):
+def diff(table, timestamp, traffic, now, interval, clusters, tolerance):
     # TODO other per-cluster error handling
     absolute = {}
     for shortname, cluster in clusters.items():
@@ -52,20 +49,22 @@ def diff(table, timestamp, traffic, now, interval, clusters):
                 (now, traffic, table, interval.format(t=timestamp))):
                 break
         absolute[shortname] = returned
-    return resolve(absolute), absolute
+    return resolve(absolute, tolerance), absolute
 
 def __main__():
-    if len(sys.argv) != 6:
-        print('''usage: data-diff CLUSTERS INTERVAL TABLE TIMESTAMP TRAFFIC
+    if len(sys.argv) not in [6, 7]:
+        print('''usage: data-diff CLUSTERS INTERVAL TABLE TIMESTAMP TRAFFIC [TOLERANCE]
 
 - CLUSTERS file line format: SHORT-NAME BOOTSTRAP-HOSTNAME (will add port 9000)
 - INTERVAL is SQL syntax with `{t}' to be replaced with timestamp column name
 - TABLE is taken from database `dist' and can use percent-style wildcard syntax
 - TIMESTAMP and TRAFFIC are column names for filtering and aggregation, resp.
+- TOLERANCE optionally specifies allowed percentage deviation from mean of all clusters
 - output format: GOOD|BAD<TAB>SUMMARY<TAB>VALUES
 ''')
         sys.exit(2)
     clusters = {}
+    tolerance = float(sys.argv[6]) if len(sys.argv) == 7 else 0.5
     now = time.time()
     with open(sys.argv[1]) as f:
         for line in f:
@@ -77,7 +76,7 @@ def __main__():
 
     interval, table, timestamp, traffic = sys.argv[2:6]
     (stat, summary), absolute = \
-        diff(table, timestamp, traffic, now, interval, clusters)
+        diff(table, timestamp, traffic, now, interval, clusters, tolerance)
     print('%s\t%s\t%s' % ('GOOD' if stat == 0 else 'BAD', summary, absolute))
 
 __main__()
