@@ -6,7 +6,7 @@ import time
 
 import clickhouse_driver
 
-__version__ = '0.2'
+__version__ = '0.2.1'
 
 def resolve(absolute, tolerance):
     keys, values = list(absolute.keys()), list(absolute.values())
@@ -30,23 +30,24 @@ def resolve(absolute, tolerance):
         else:
             return [1, ','.join(summary)]
 
-def diff(table, timestamp, traffic, now, interval, clusters, tolerance):
-    # TODO other per-cluster error handling
+def diff(dbtable, timestamp, traffic, now, interval, clusters, tolerance):
     absolute = {}
     for shortname, cluster in clusters.items():
-        for (exists,) in cluster.execute('''
-            SELECT count() FROM system.tables WHERE database = 'dist'
-            AND name = '%s'
-        ''' % table):
-            break
-        if exists != 1:
-            returned = 0
+        try:
+            cluster.execute('''DESCRIBE %s''' % dbtable)
+        except clickhouse_driver.errors.ServerException as e:
+                if e.code in [
+                    clickhouse_driver.errors.ErrorCodes.UNKNOWN_DATABASE,
+                    clickhouse_driver.errors.ErrorCodes.UNKNOWN_TABLE]:
+                    returned = 0
+                else:
+                    raise e
         else:
             for (returned,) in cluster.execute('''
                 WITH toStartOfHour(fromUnixTimestamp(%d)) AS start
-                SELECT sum(%s) FROM dist.%s WHERE %s
+                SELECT sum(%s) FROM %s WHERE %s
                 ''' % \
-                (now, traffic, table, interval.format(t=timestamp))):
+                (now, traffic, dbtable, interval.format(t=timestamp))):
                 break
         absolute[shortname] = returned
     return resolve(absolute, tolerance), absolute
@@ -57,9 +58,9 @@ def __main__():
 
 - CLUSTERS file line format: SHORT-NAME BOOTSTRAP-HOSTNAME (will add port 9000)
 - INTERVAL is SQL syntax with `{t}' to be replaced with timestamp column name
-- TABLE is taken from database `dist' and can use percent-style wildcard syntax
+- TABLE can use percent-style wildcard syntax and specify database as well
 - TIMESTAMP and TRAFFIC are column names for filtering and aggregation, resp.
-- TOLERANCE optionally specifies allowed percentage deviation from mean of all clusters
+- TOLERANCE specifies max allowed percentage deviation from mean of all clusters
 - output format: GOOD|BAD<TAB>SUMMARY<TAB>VALUES
 ''')
         sys.exit(2)
@@ -74,9 +75,9 @@ def __main__():
             clusters[split[0]] = clickhouse_driver.Client(
                 host=split[1], port=9000, user='default', password='')
 
-    interval, table, timestamp, traffic = sys.argv[2:6]
+    interval, dbtable, timestamp, traffic = sys.argv[2:6]
     (stat, summary), absolute = \
-        diff(table, timestamp, traffic, now, interval, clusters, tolerance)
+        diff(dbtable, timestamp, traffic, now, interval, clusters, tolerance)
     print('%s\t%s\t%s' % ('GOOD' if stat == 0 else 'BAD', summary, absolute))
 
 __main__()
