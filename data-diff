@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import datetime
 import os
 import statistics
 import sys
@@ -6,7 +7,7 @@ import time
 
 import clickhouse_driver
 
-__version__ = '0.2.1'
+__version__ = '0.2.2'
 
 def resolve(absolute, tolerance):
     keys, values = list(absolute.keys()), list(absolute.values())
@@ -43,12 +44,18 @@ def diff(dbtable, timestamp, traffic, now, interval, clusters, tolerance):
                 else:
                     raise e
         else:
-            for (returned,) in cluster.execute('''
+            query = '''
                 WITH toStartOfHour(fromUnixTimestamp(%d)) AS start
                 SELECT sum(%s) FROM %s WHERE %s
                 ''' % \
-                (now, traffic, dbtable, interval.format(t=timestamp))):
+                (now, traffic, dbtable, interval.format(t=timestamp))
+            print(' '.join(query.split()), file=sys.stderr)
+            start = datetime.datetime.now()
+            for (returned,) in cluster.execute(query): # first row
                 break
+            print('took %d sec' % \
+                (datetime.datetime.now() - start).total_seconds(), \
+                file=sys.stderr)
         absolute[shortname] = returned
     return resolve(absolute, tolerance), absolute
 
